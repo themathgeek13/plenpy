@@ -1,0 +1,28 @@
+# .coveragerc to control coverage.py
+[run]
+branch = True
+omit = plenpy/testing.py, *__init__.py, plenpy/utilities/lytro_reader.py, test/*
+
+[report]
+# Regexes for lines to exclude from consideration
+exclude_lines =
+    # Have to re-enable the standard pragma
+    pragma: no cover
+
+    # Don't complain about missing debug-only code:
+    def __repr__
+    if self\.debug
+
+    # Don't complain if tests don't hit defensive assertion code:
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain if non-runnable code isn't run:
+    if 0:
+    if __name__ == .__main__.:
+
+    # Exclude all "show_*" functions
+    def show_*
+
+ignore_errors = True
+

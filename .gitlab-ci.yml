@@ -1,0 +1,152 @@
+stages:
+  - test 
+  - build
+  - deploy
+
+
+test_python3.6:
+  only:
+    - tags
+    - master
+    - merge_requests
+  stage: test
+  image: python:3.6-stretch
+  tags:
+    - docker
+  
+  script:
+    - make test
+
+
+test_python3.7:
+  only:
+    - tags
+    - master
+    - merge_requests
+  stage: test
+  image: python:3.7-stretch
+  tags:
+    - docker
+  
+  script:
+    - make test
+
+
+test_python3.8:
+  only:
+    - tags
+    - master
+    - merge_requests
+  stage: test
+  image: python:3.8-buster
+  tags:
+    - docker
+  
+  script:
+    - make test
+
+
+test_coverage:
+  only:
+    - master
+    - merge_requests
+  stage: test
+  image: python:3.7-stretch
+  tags:
+    - docker
+  
+  script:
+    - make coverage
+
+
+docker_test:
+  only:
+    - tags
+    - master
+    - merge_requests
+  stage: test
+  image: docker:stable
+  tags:
+    - docker
+
+  variables:
+    DOCKER_DRIVER: overlay2
+
+  services:
+   - docker:dind
+  
+  script:
+    - docker build --build-arg version=3.7 --rm -t $CI_REGISTRY_IMAGE:test .
+
+
+docker_deploy:
+  stage: deploy
+  only:
+    - tags
+  image: docker:stable
+  tags:
+    - docker
+
+  variables:
+    DOCKER_DRIVER: overlay2
+
+  services:
+   - docker:dind
+
+  before_script:
+   - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  
+  script:
+    - docker build --build-arg version=3.7 --rm -t $CI_REGISTRY_IMAGE:${CI_COMMIT_REF_NAME:1} -t $CI_REGISTRY_IMAGE:latest .
+    - docker push $CI_REGISTRY_IMAGE:${CI_COMMIT_REF_NAME:1}
+    - docker push $CI_REGISTRY_IMAGE:latest
+
+
+pypi_deploy:
+  stage: deploy
+  only:
+    - tags
+  image: python:3.7-stretch
+  tags:
+    - docker
+
+  before_script:
+    - pip install -r requirements.txt
+    - python setup.py sdist bdist_wheel
+  
+  script:
+    - twine upload -u __token__ -p $PYPI_TOKEN dist/*
+
+doc_build:
+  stage: build
+  only:
+    - tags
+  image: python:3.7-stretch
+  tags:
+    - docker
+     
+  script:
+    - make
+    - pip install -r docs/requirements.txt
+    - m2r README.md
+    - mv README.rst docs/
+    - cd docs
+    - sphinx-apidoc -f -o ./ ../plenpy/
+    - make html
+
+  artifacts:
+    expire_in: 1 week
+    paths:
+    - docs/_build/html/
+
+
+pages:
+  only:
+    - tags
+  stage: deploy
+  script:
+    - mkdir public
+    - cp -r docs/_build/html/* public/
+  artifacts:
+    paths:
+    - public

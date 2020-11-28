@@ -1,0 +1,18 @@
+# This is the official list of plenpy contributors for copyright purposes.
+# For detailed contributions, see also the git history.
+
+Karlsruhe Institute of Technology (KIT)
+Institute of Industrial Information Technology (IIIT)
+David Uhlig <david.uhlig@kit.edu>
+
+plenpy/lightfields.py
+- Depth estimation using 2D, 2.5D EPI
+- Light field defocus
+- Plot light field defocus series
+- Plot light field depth using HSV
+- Corresponding tests
+
+utilities/denoise.py
+- TV-LX disparity denoising
+- Disparity map filtering
+- Corresponding tests
