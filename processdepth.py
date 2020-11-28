@@ -40,7 +40,7 @@ def generate_digital_zoom(inputimg, inputdepth, zoom_factor):
     zoomdepth = np.zeros_like(inputdepth)
     for i in range(C):
         zoomimg[x1B[i],y1B[i],i] = inputimg[:, :, i]
-    zoomdepth[np.indices(inputdepth.shape)[0], np.indices(inputdepth.shape)[1]] = inputdepth[:,:]
+    zoomdepth[x1B[0], y1B[0]] = inputdepth[:,:]
 
     return zoomimg, zoomdepth
 
@@ -68,7 +68,7 @@ class SynthesisPipeline(object):
         synthdepth = np.ones_like(inputdepth)*self.maskf
         for i in range(C):
             synthimg[x1B[i],y1B[i],i] = inputimg[:, :, i]
-        synthdepth[np.indices(inputdepth.shape)[0], np.indices(inputdepth.shape)[1]] = inputdepth[:, :]
+        synthdepth[x1B[0], y1B[0]] = inputdepth[:, :]
 
         return synthimg, synthdepth
 
@@ -108,3 +108,17 @@ if __name__ == "__main__":
     dmask[np.where(D1DZ == sp1.maskf)] = 1
     I_F = mask*I2DZ + (1-mask)*I1DZ
     D_F = dmask*D2DZ + (1-dmask)*D1DZ
+
+    # depth occlusion mask
+    depth_occlusion_mask = np.zeros_like(I_F)
+    depth_occlusion_mask[np.where(I_F == sp1.maskf)] = 1
+
+    # Algorithm 1: Depth map hole filling
+    H, W = D_F.shape
+    D_F_bar = D_F.copy()
+    for x in range(H-1):
+        for y in range(W-1):
+            if depth_occlusion_mask[x][y]==1:
+                dmax = max(D_F[x-1][y], D_F[x][y-1], D_F[x][y+1], D_F[x+1][y])
+                D_F_bar[x][y] = dmax
+    
