@@ -24,25 +24,42 @@ from plenpy.lightfields import LightField
 from plenpy.cameras.lytro_illum import LytroIllum
 from pylab import *
 import numpy as np
+import cv2
 
-def generate_digital_zoom(inputimg, inputdepth, zoom_factor):
-    x1A, y1A, __ = np.indices(inputimg.shape)
-    H, W, C = inputimg.shape
+def cv2_clipped_zoom(img, zoom_factor):
+    """
+    Center zoom in/out of the given image and returning an enlarged/shrinked view of 
+    the image without changing dimensions
+    Args:
+        img : Image array
+        zoom_factor : amount of zoom as a ratio (0 to Inf)
 
-    u0 = [H//2, W//2]
+    Reference: https://stackoverflow.com/questions/37119071/scipy-rotate-and-zoom-an-image-without-changing-its-dimensions/37121993#37121993
+    """
 
-    x1B = zoom_factor*x1A + (1-zoom_factor)*u0[0]
-    x1B = x1B.astype(np.int16).transpose(2,0,1)
-    y1B = zoom_factor*y1A + (1-zoom_factor)*u0[1]
-    y1B = y1B.astype(np.int16).transpose(2,0,1)
+    height, width = img.shape[:2] # It's also the final desired shape
+    new_height, new_width = int(height * zoom_factor), int(width * zoom_factor)
 
-    zoomimg = np.zeros_like(inputimg)
-    zoomdepth = np.zeros_like(inputdepth)
-    for i in range(C):
-        zoomimg[x1B[i],y1B[i],i] = inputimg[:, :, i]
-    zoomdepth[x1B[0], y1B[0]] = inputdepth[:,:]
+    ### Crop only the part that will remain in the result (more efficient)
+    # Centered bbox of the final desired size in resized (larger/smaller) image coordinates
+    y1, x1 = max(0, new_height - height) // 2, max(0, new_width - width) // 2
+    y2, x2 = y1 + height, x1 + width
+    bbox = np.array([y1,x1,y2,x2])
+    # Map back to original image coordinates
+    bbox = (bbox / zoom_factor).astype(np.int)
+    y1, x1, y2, x2 = bbox
+    cropped_img = img[y1:y2, x1:x2]
 
-    return zoomimg, zoomdepth
+    # Handle padding when downscaling
+    resize_height, resize_width = min(new_height, height), min(new_width, width)
+    pad_height1, pad_width1 = (height - resize_height) // 2, (width - resize_width) //2
+    pad_height2, pad_width2 = (height - resize_height) - pad_height1, (width - resize_width) - pad_width1
+    pad_spec = [(pad_height1, pad_height2), (pad_width1, pad_width2)] + [(0,0)] * (img.ndim - 2)
+
+    result = cv2.resize(cropped_img, (resize_width, resize_height))
+    result = np.pad(result, pad_spec, mode='constant')
+    assert result.shape[0] == height and result.shape[1] == width
+    return result
 
 class SynthesisPipeline(object):
     
@@ -88,8 +105,9 @@ if __name__ == "__main__":
     D = (disp.copy()+3)/6.0
     H, W, C = lf[6][6].shape
 
-    # create the digitally zoomed versions I1 and I2
-    I1, D1 = generate_digital_zoom(I, D, zoom_factor=0.95)
+    # create the digitally zoomed versions I1 and D1
+    I1 = cv2_clipped_zoom(I, 1.125)
+    D1 = cv2_clipped_zoom(D, 1.125)
     I2, D2 = I, D
 
     # create two separate view synthesis pipelines
@@ -97,7 +115,7 @@ if __name__ == "__main__":
     sp1 = SynthesisPipeline(**kwargs1)
     I1DZ, D1DZ = sp1.generate_synthesized_views(I1, D1)
 
-    kwargs2 = {'D0': 1, 't': -0.1, 'u0': [H//2, W//2]}
+    kwargs2 = {'D0': 1, 't': -0.05, 'u0': [H//2, W//2]}
     sp2 = SynthesisPipeline(**kwargs2)
     I2DZ, D2DZ = sp2.generate_synthesized_views(I2, D2)
 
@@ -110,8 +128,8 @@ if __name__ == "__main__":
     D_F = dmask*D2DZ + (1-dmask)*D1DZ
 
     # depth occlusion mask
-    depth_occlusion_mask = np.zeros_like(I_F)
-    depth_occlusion_mask[np.where(I_F == sp1.maskf)] = 1
+    depth_occlusion_mask = np.zeros_like(D_F)
+    depth_occlusion_mask[np.where(D_F == sp1.maskf)] = 1
 
     # Algorithm 1: Depth map hole filling
     H, W = D_F.shape
@@ -121,4 +139,4 @@ if __name__ == "__main__":
             if depth_occlusion_mask[x][y]==1:
                 dmax = max(D_F[x-1][y], D_F[x][y-1], D_F[x][y+1], D_F[x+1][y])
                 D_F_bar[x][y] = dmax
-    
+        
