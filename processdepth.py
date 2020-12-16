@@ -85,6 +85,80 @@ def discretedepth(D, N=20):
 
     return discdepth 
 
+def image_hole_filling(I_F, D_F_bar_disc):
+    # Algorithm 2: Image hole filling
+    # step 1
+    finalimg = []
+    for ch in range(3):
+        I_F_bar = np.copy(I_F[:,:,ch])
+        # step 2
+        d_u = np.unique(D_F_bar_disc)
+        S = len(d_u)
+        M_prev = np.zeros_like(M[:,:,ch])
+
+        # step 3
+        for s in range(S-1, 0, -1):
+            # 3.1
+            pos = np.where((D_F_bar_disc > d_u[s-1]) & (D_F_bar_disc <= d_u[s]))
+            D_s = np.zeros_like(D_F_bar_disc)
+            D_s[pos] = 1
+
+            # 3.2
+            I_s = np.multiply(I_F[:,:,ch], D_s)
+
+            # 3.3
+            M_curr = np.multiply(M[:,:,ch], D_s)
+
+            # 3.4
+            M_curr = np.logical_or(M_curr, M_prev)
+
+            # 3.5
+            for x in range(H-1):
+                for y in range(W-1):
+                    if M_curr[x,y]==1:
+                        # 3.5.1
+                        # find nearest valid pixel in same row
+                        # https://stackoverflow.com/questions/2566412/find-nearest-value-in-numpy-array
+                        def find_nearest_non_zero(array, value):
+                            posarr = array[np.where(array>0)]
+                            if len(posarr) == 0:
+                                return 0, 0
+                            idx = (np.abs(posarr-value)).argmin()
+                            val = posarr[idx]
+                            # print(np.where(abs(array-val)<1e-6)[0][0])
+                            mainidx = int(np.where(abs(array-val)<1e-6)[0][0])
+                            return mainidx, val
+                        row = I_s[:,y]
+                        if x > 0:
+                            revidx, __ = find_nearest_non_zero(row[:x][::-1], 0)
+                            idx, __ = find_nearest_non_zero(row[x:], 0)
+                            if(revidx < idx):
+                                xd = x - revidx - 1
+                            else:
+                                xd = x + idx
+                        else:
+                            xd, __ = find_nearest_non_zero(row, 0)
+
+                        # 3.5.2 update the value of I_F_bar
+                        # print(x,xd)
+                        I_F_bar[x][y] = I_s[xd][y]
+                        
+                        # 3.5.3 update M_curr
+                        M_curr[x][y] = 0
+
+                        # 3.5.4 update M
+                        M[x][y][ch] = 0
+
+            # 3.6 propagate current occlusion mask
+            M_prev = M_curr.copy()
+        
+        # apply simple low pass filtering on the filled-in 
+        # occluded areas in I_F_bar
+        finalimg.append(I_F_bar)
+    
+    I_F_bar = np.dstack(finalimg)
+    return I_F_bar
+
 class SynthesisPipeline(object):
     
     def __init__(self, *args, **kwargs):
@@ -173,70 +247,8 @@ if __name__ == "__main__":
     # Depth values always in the range of -1 to 1
     # But since it is often a subject based shot, many values clustered
     # around the center, meaning Gaussian fit would be best
-    D_F_bar_disc = discretedepth(D_F_bar, N=200)
+    D_F_bar_disc = discretedepth(D_F_bar, N=5)
 
     print("INFO: Done discretizing the depth values.")
         
-    # Algorithm 2: Image hole filling
-    # step 1
-    finalimg = []
-    for ch in range(3):
-        I_F_bar = np.copy(I_F[:,:,ch])
-        # step 2
-        d_u = np.unique(D_F_bar_disc)
-        S = len(d_u)
-        M_prev = np.zeros_like(M[:,:,ch])
-
-        # step 3
-        for s in range(S-1, 0, -1):
-            # 3.1
-            pos = np.where((D_F_bar_disc > d_u[s-1]) & (D_F_bar_disc <= d_u[s]))
-            D_s = np.zeros_like(D_F_bar_disc)
-            D_s[pos] = D_F_bar_disc[pos]
-
-            # 3.2
-            I_s = np.multiply(I_F[:,:,ch], D_s)
-
-            # 3.3
-            M_curr = np.multiply(M[:,:,ch], D_s)
-
-            # 3.4
-            M_curr = np.logical_or(M_curr, M_prev)
-
-            # 3.5
-            for x in range(H-1):
-                for y in range(W-1):
-                    if M_curr[x,y]==1:
-                        # 3.5.1
-                        # find nearest valid pixel in same row
-                        # https://stackoverflow.com/questions/2566412/find-nearest-value-in-numpy-array
-                        def find_nearest(array, value):
-                            idx = (np.abs(array-value)).argmax()
-                            return idx, array[idx]
-                        row = I_F[:,y,ch]
-                        if x > 0:
-                            revidx, __ = find_nearest(row[:x][::-1], sp1.maskf)
-                            idx, __ = find_nearest(row[x:], sp1.maskf)
-                            if(revidx < idx):
-                                xd = x - revidx - 1
-                            else:
-                                xd = x + idx
-                        else:
-                            xd, __ = find_nearest(row, sp1.maskf)
-
-                        # 3.5.2 update the value of I_F_bar
-                        # print(x,xd)
-                        I_F_bar[x][y] = I_s[xd][y]
-                        
-                        # 3.5.3 update M_curr
-                        M_curr[x][y] = 0
-
-                        # 3.5.4 update M
-                        M[x][y][ch] = 0
-
-            # 3.6 propagate current occlusion mask
-            M_prev = M_curr.copy()
-        
-        # apply simple low pass filtering on the filled-in 
-        # occluded areas in I_F_bar
-        finalimg.append(I_F_bar)
+    I_F_bar = image_hole_filling(I_F, D_F_bar_disc)
