@@ -27,6 +27,7 @@ import numpy as np
 import cv2
 
 from sklearn.cluster import KMeans
+from scipy.ndimage import gaussian_filter
 
 def cv2_clipped_zoom(img, zoom_factor):
     """
@@ -86,7 +87,6 @@ def discretedepth(D, N=20):
     return discdepth 
 
 def image_hole_filling(I_F, D_F_bar_disc):
-    # Algorithm 2: Image hole filling
     # step 1
     finalimg = []
     for ch in range(3):
@@ -158,6 +158,44 @@ def image_hole_filling(I_F, D_F_bar_disc):
     
     I_F_bar = np.dstack(finalimg)
     return I_F_bar
+
+def shallow_depth_of_field(D_F_bar_disc, I_F_bar, DISCRETE_DEPTH, PREF_DEPTH):
+    # get a set of blur values for depths
+    sigma_map = np.array(np.round(abs(np.array(D_F_bar_disc, dtype='float32') - PREF_DEPTH)*255).clip(0,255), dtype='float')
+    # convert them to 0 to 7
+    blur_kernels = np.array(np.unique(sigma_map)*11/np.max(sigma_map), dtype='uint8')
+    blur_kernels = np.ceil(blur_kernels) // 2 * 2 + 1
+    print(blur_kernels)
+
+    d_u = np.unique(D_F_bar_disc)
+    I_F_bar_DZ = np.zeros_like(I_F_bar)
+    for depth in range(DISCRETE_DEPTH+2):
+        # get image segments at that depth:
+        depthsegmask = np.ones_like(I_F_bar)
+        condition = np.where(abs(D_F_bar_disc - d_u[depth])<1e-3)
+        depthsegmask[condition] = 2
+        depthsegmask/=2
+        # dilate the mask a bit
+        # kernel = np.ones((3,3),np.uint8)
+        # depthsegmask = cv2.morphologyEx(depthsegmask, cv2.MORPH_CLOSE, kernel)
+        depthsegimg = depthsegmask * I_F_bar
+        # plt.imshow(depthsegmask)
+        # plt.pause(1)
+
+        # now blur this map by using a kernel of that size
+        bksize = blur_kernels[depth]
+        blurimg = cv2.bilateralFilter(depthsegimg, 15, 75, 75) #cv2.GaussianBlur(depthsegimg, (bksize, bksize), 0)
+
+        # now use this blurred image and replace original image with it
+        I_F_bar_DZ += blurimg*depthsegmask
+
+        plt.imshow(I_F_bar_DZ)
+        plt.pause(1)
+
+    I_F_bar_DZ *= I_F_bar.max()/I_F_bar_DZ.max()
+
+    finaloutput = cv2.medianBlur(I_F_bar_DZ, 5)
+    return finaloutput
 
 class SynthesisPipeline(object):
     
@@ -247,8 +285,14 @@ if __name__ == "__main__":
     # Depth values always in the range of -1 to 1
     # But since it is often a subject based shot, many values clustered
     # around the center, meaning Gaussian fit would be best
-    D_F_bar_disc = discretedepth(D_F_bar, N=5)
+    DISCRETE_DEPTH = 5
+    PREF_DEPTH = 0.7
+    D_F_bar_disc = discretedepth(D_F_bar, N=DISCRETE_DEPTH)
 
     print("INFO: Done discretizing the depth values.")
         
+    # Algorithm 2: Image hole filling
     I_F_bar = image_hole_filling(I_F, D_F_bar_disc)
+
+    # Algorithm 3: Shallow Depth of Field
+    finalresult = shallow_depth_of_field(D_F_bar_disc, I_F_bar, DISCRETE_DEPTH, PREF_DEPTH)
