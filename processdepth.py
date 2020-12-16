@@ -26,6 +26,8 @@ from pylab import *
 import numpy as np
 import cv2
 
+from sklearn.cluster import KMeans
+
 def cv2_clipped_zoom(img, zoom_factor):
     """
     Center zoom in/out of the given image and returning an enlarged/shrinked view of 
@@ -60,6 +62,28 @@ def cv2_clipped_zoom(img, zoom_factor):
     result = np.pad(result, pad_spec, mode='constant')
     assert result.shape[0] == height and result.shape[1] == width
     return result
+
+def depth_map_hole_filling(D_F, depth_occlusion_mask):
+    H, W = D_F.shape
+    D_F_bar = D_F.copy()
+    for x in range(H-1):
+        for y in range(W-1):
+            if depth_occlusion_mask[x][y]==1:
+                dmax = max(D_F[x-1][y], D_F[x][y-1], D_F[x][y+1], D_F[x+1][y])
+                D_F_bar[x][y] = dmax
+    return D_F_bar
+
+def discretedepth(D, N=20):
+    discdepth = D.copy()
+    u = np.unique(D).reshape(-1,1)
+    kmeans = KMeans(n_clusters=N)
+    kmeans.fit(u)
+    intervals = [1]+sorted(kmeans.cluster_centers_, reverse=True)+[0]
+    for i in range(len(intervals)-1):
+        pos = np.where((discdepth<=intervals[i]) & (discdepth>intervals[i+1]))
+        discdepth[pos] = intervals[i]
+
+    return discdepth 
 
 class SynthesisPipeline(object):
     
@@ -127,16 +151,92 @@ if __name__ == "__main__":
     I_F = mask*I2DZ + (1-mask)*I1DZ
     D_F = dmask*D2DZ + (1-dmask)*D1DZ
 
+    I_F = np.asarray(I_F)
+    D_F = np.asarray(D_F)
+
     # depth occlusion mask
     depth_occlusion_mask = np.zeros_like(D_F)
     depth_occlusion_mask[np.where(D_F == sp1.maskf)] = 1
 
+    # image occlusion mask
+    M = np.zeros_like(np.asarray(I_F))
+    M[np.where(I_F == sp1.maskf)] = 1
+
     # Algorithm 1: Depth map hole filling
-    H, W = D_F.shape
-    D_F_bar = D_F.copy()
-    for x in range(H-1):
-        for y in range(W-1):
-            if depth_occlusion_mask[x][y]==1:
-                dmax = max(D_F[x-1][y], D_F[x][y-1], D_F[x][y+1], D_F[x+1][y])
-                D_F_bar[x][y] = dmax
+    D_F_bar = depth_map_hole_filling(D_F, depth_occlusion_mask)
+
+    # set the remaining points to zero, since we need 
+    # to use the depth map after this
+    D_F_bar[np.where(D_F_bar == sp1.maskf)] = 0
+
+    # Need to discretize the depth values for the next algorithm
+    # Depth values always in the range of -1 to 1
+    # But since it is often a subject based shot, many values clustered
+    # around the center, meaning Gaussian fit would be best
+    D_F_bar_disc = discretedepth(D_F_bar, N=200)
+
+    print("INFO: Done discretizing the depth values.")
         
+    # Algorithm 2: Image hole filling
+    # step 1
+    finalimg = []
+    for ch in range(3):
+        I_F_bar = np.copy(I_F[:,:,ch])
+        # step 2
+        d_u = np.unique(D_F_bar_disc)
+        S = len(d_u)
+        M_prev = np.zeros_like(M[:,:,ch])
+
+        # step 3
+        for s in range(S-1, 0, -1):
+            # 3.1
+            pos = np.where((D_F_bar_disc > d_u[s-1]) & (D_F_bar_disc <= d_u[s]))
+            D_s = np.zeros_like(D_F_bar_disc)
+            D_s[pos] = D_F_bar_disc[pos]
+
+            # 3.2
+            I_s = np.multiply(I_F[:,:,ch], D_s)
+
+            # 3.3
+            M_curr = np.multiply(M[:,:,ch], D_s)
+
+            # 3.4
+            M_curr = np.logical_or(M_curr, M_prev)
+
+            # 3.5
+            for x in range(H-1):
+                for y in range(W-1):
+                    if M_curr[x,y]==1:
+                        # 3.5.1
+                        # find nearest valid pixel in same row
+                        # https://stackoverflow.com/questions/2566412/find-nearest-value-in-numpy-array
+                        def find_nearest(array, value):
+                            idx = (np.abs(array-value)).argmax()
+                            return idx, array[idx]
+                        row = I_F[:,y,ch]
+                        if x > 0:
+                            revidx, __ = find_nearest(row[:x][::-1], sp1.maskf)
+                            idx, __ = find_nearest(row[x:], sp1.maskf)
+                            if(revidx < idx):
+                                xd = x - revidx - 1
+                            else:
+                                xd = x + idx
+                        else:
+                            xd, __ = find_nearest(row, sp1.maskf)
+
+                        # 3.5.2 update the value of I_F_bar
+                        # print(x,xd)
+                        I_F_bar[x][y] = I_s[xd][y]
+                        
+                        # 3.5.3 update M_curr
+                        M_curr[x][y] = 0
+
+                        # 3.5.4 update M
+                        M[x][y][ch] = 0
+
+            # 3.6 propagate current occlusion mask
+            M_prev = M_curr.copy()
+        
+        # apply simple low pass filtering on the filled-in 
+        # occluded areas in I_F_bar
+        finalimg.append(I_F_bar)
