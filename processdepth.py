@@ -29,6 +29,8 @@ import cv2
 from sklearn.cluster import KMeans
 from scipy.ndimage import gaussian_filter
 
+MASK = 10
+
 def cv2_clipped_zoom(img, zoom_factor):
     """
     Center zoom in/out of the given image and returning an enlarged/shrinked view of 
@@ -86,7 +88,7 @@ def discretedepth(D, N=20):
 
     return discdepth 
 
-def image_hole_filling(I_F, D_F_bar_disc):
+def image_hole_filling(I_F, D_F_bar_disc, M):
     # step 1
     finalimg = []
     for ch in range(3):
@@ -100,7 +102,7 @@ def image_hole_filling(I_F, D_F_bar_disc):
         for s in range(S-1, 0, -1):
             # 3.1
             pos = np.where((D_F_bar_disc > d_u[s-1]) & (D_F_bar_disc <= d_u[s]))
-            D_s = np.zeros_like(D_F_bar_disc)
+            D_s = np.zeros_like(D_F_bar_disc, dtype=np.float)
             D_s[pos] = 1
 
             # 3.2
@@ -128,7 +130,7 @@ def image_hole_filling(I_F, D_F_bar_disc):
                             # print(np.where(abs(array-val)<1e-6)[0][0])
                             mainidx = int(np.where(abs(array-val)<1e-6)[0][0])
                             return mainidx, val
-                        row = I_s[:,y]
+                        row = M[:,y]
                         if x > 0:
                             revidx, __ = find_nearest_non_zero(row[:x][::-1], 0)
                             idx, __ = find_nearest_non_zero(row[x:], 0)
@@ -154,7 +156,7 @@ def image_hole_filling(I_F, D_F_bar_disc):
         
         # apply simple low pass filtering on the filled-in 
         # occluded areas in I_F_bar
-        finalimg.append(I_F_bar)
+        finalimg.append(cv2.medianBlur(I_F_bar, 5))
     
     I_F_bar = np.dstack(finalimg)
     return I_F_bar
@@ -184,46 +186,38 @@ def shallow_depth_of_field(D_F_bar_disc, I_F_bar, DISCRETE_DEPTH, PREF_DEPTH):
 
         # now blur this map by using a kernel of that size
         bksize = blur_kernels[depth]
-        blurimg = cv2.bilateralFilter(depthsegimg, 15, 75, 75) #cv2.GaussianBlur(depthsegimg, (bksize, bksize), 0)
+        blurimg = cv2.GaussianBlur(depthsegimg, (bksize, bksize), 0)
 
         # now use this blurred image and replace original image with it
         I_F_bar_DZ += blurimg*depthsegmask
 
-        plt.imshow(I_F_bar_DZ)
-        plt.pause(1)
+        # plt.imshow(I_F_bar_DZ)
+        # plt.pause(1)
 
     I_F_bar_DZ *= I_F_bar.max()/I_F_bar_DZ.max()
 
     finaloutput = cv2.medianBlur(I_F_bar_DZ, 5)
     return finaloutput
 
-class SynthesisPipeline(object):
-    
-    def __init__(self, *args, **kwargs):
-        self.D0 = kwargs['D0'] if 'D0' in kwargs else 0.5
-        self.t  = kwargs['t'] if 't' in kwargs else 0.2
-        self.u0 = kwargs['u0'] if 'u0' in kwargs else None
-        self.maskf = 1000
-
-    def generate_synthesized_views(self, inputimg, inputdepth):
-        x1A, y1A, __ = np.indices(inputimg.shape)
-        H, W, C = inputimg.shape
-        if self.u0 is None:
-            self.u0 = [H//2, W//2]
-
-        self.D1A = np.dstack([inputdepth, inputdepth, inputdepth])
-        x1B = self.D1A*(self.D0-self.t)*x1A/(self.D0*(self.D1A-self.t)) + self.t*(self.D1A-self.D0)*self.u0[0]/(self.D0*(self.D1A-self.t))
-        x1B = x1B.astype(np.int16).transpose(2,0,1)
-        y1B = self.D1A*(self.D0-self.t)*y1A/(self.D0*(self.D1A-self.t)) + self.t*(self.D1A-self.D0)*self.u0[1]/(self.D0*(self.D1A-self.t))
-        y1B = y1B.astype(np.int16).transpose(2,0,1)
-
-        synthimg = np.ones_like(inputimg)*self.maskf
-        synthdepth = np.ones_like(inputdepth)*self.maskf
-        for i in range(C):
-            synthimg[x1B[i],y1B[i],i] = inputimg[:, :, i]
-        synthdepth[x1B[0], y1B[0]] = inputdepth[:, :]
-
-        return synthimg, synthdepth
+def generate_synthesized_views(inputimg, inputdepth, t, D0):
+    x1A, y1A, __ = np.indices(inputimg.shape)
+    H, W, C = inputimg.shape
+    u0 = [H//2, W//2]
+    # forward warping(f, h) -> g:
+    #   for every pixel x in f(x):
+    #       1. compute destination location x' = h(x)
+    #       2. copy pixel from f(x) to g(x')
+    resultimg = np.ones_like(inputimg)*MASK
+    zbuffer = np.ones_like(inputdepth)*MASK
+    for x in range(W):
+        for y in range(H):
+            D1A = inputdepth[y][x]
+            newx = np.clip(int(D1A*(D0-t)*x/D0/(D1A-t+1e-3) + t*(D1A-D0)*u0[1]/D0/(D1A-t+1e-3)), 0, W-1)
+            newy = np.clip(int(D1A*(D0-t)*y/D0/(D1A-t+1e-3) + t*(D1A-D0)*u0[0]/D0/(D1A-t+1e-3)), 0, H-1)
+            if inputdepth[newy][newx] < zbuffer[newy][newx]:
+                zbuffer[newy][newx] = inputdepth[newy][newx]
+                resultimg[newy][newx] = inputimg[y][x]
+    return resultimg, zbuffer
 
 if __name__ == "__main__":
     cam = LytroIllum("/home/rohan/Downloads/LytroIllum_Dataset_INRIA_SIROCCO")
@@ -233,7 +227,7 @@ if __name__ == "__main__":
     image = cam.get_decoded_image(135)
     lf = LightField(image)
 
-    lf.show()
+    # lf.show()
 
     disp, conf = lf.get_disparity(method='structure_tensor', fusion_method='tv_l1', epi_method = '2.5d')
 
@@ -242,24 +236,20 @@ if __name__ == "__main__":
     H, W, C = lf[6][6].shape
 
     # create the digitally zoomed versions I1 and D1
-    I1 = cv2_clipped_zoom(I, 1.125)
-    D1 = cv2_clipped_zoom(D, 1.125)
+    I1 = cv2_clipped_zoom(I, 1.2)
+    D1 = cv2_clipped_zoom(D, 1.2)
     I2, D2 = I, D
 
     # create two separate view synthesis pipelines
-    kwargs1 = {'D0': 1, 't': 0, 'u0': [H//2, W//2]}
-    sp1 = SynthesisPipeline(**kwargs1)
-    I1DZ, D1DZ = sp1.generate_synthesized_views(I1, D1)
+    I1DZ, D1DZ = generate_synthesized_views(I1, D1, -0.05, 1) #sp1.generate_synthesized_views(I1, D1)
 
-    kwargs2 = {'D0': 1, 't': -0.05, 'u0': [H//2, W//2]}
-    sp2 = SynthesisPipeline(**kwargs2)
-    I2DZ, D2DZ = sp2.generate_synthesized_views(I2, D2)
+    I2DZ, D2DZ = generate_synthesized_views(I2, D2, 0.05, 1) #sp2.generate_synthesized_views(I2, D2)
 
     # image/depth fusion step
     mask = np.zeros_like(I1DZ)
-    mask[np.where(I1DZ == sp1.maskf)] = 1
+    mask[np.where(I1DZ == MASK)] = 1
     dmask = np.zeros_like(D1DZ)
-    dmask[np.where(D1DZ == sp1.maskf)] = 1
+    dmask[np.where(D1DZ == MASK)] = 1
     I_F = mask*I2DZ + (1-mask)*I1DZ
     D_F = dmask*D2DZ + (1-dmask)*D1DZ
 
@@ -268,18 +258,18 @@ if __name__ == "__main__":
 
     # depth occlusion mask
     depth_occlusion_mask = np.zeros_like(D_F)
-    depth_occlusion_mask[np.where(D_F == sp1.maskf)] = 1
+    depth_occlusion_mask[np.where(D_F == MASK)] = 1
 
     # image occlusion mask
     M = np.zeros_like(np.asarray(I_F))
-    M[np.where(I_F == sp1.maskf)] = 1
+    M[np.where(I_F == MASK)] = 1
 
     # Algorithm 1: Depth map hole filling
     D_F_bar = depth_map_hole_filling(D_F, depth_occlusion_mask)
 
-    # set the remaining points to zero, since we need 
+    # set the remaining points to near-zero, since we need 
     # to use the depth map after this
-    D_F_bar[np.where(D_F_bar == sp1.maskf)] = 0
+    D_F_bar[np.where(D_F_bar == MASK)] = 1e-3
 
     # Need to discretize the depth values for the next algorithm
     # Depth values always in the range of -1 to 1
@@ -292,7 +282,8 @@ if __name__ == "__main__":
     print("INFO: Done discretizing the depth values.")
         
     # Algorithm 2: Image hole filling
-    I_F_bar = image_hole_filling(I_F, D_F_bar_disc)
+    I_F_bar = image_hole_filling(I_F, D_F_bar_disc, M)
+    I_F_bar[np.where(I_F_bar > MASK/2)] = 0
 
     # Algorithm 3: Shallow Depth of Field
-    finalresult = shallow_depth_of_field(D_F_bar_disc, I_F_bar, DISCRETE_DEPTH, PREF_DEPTH)
+    finalresult = shallow_depth_of_field(D_F_bar_disc, I_F_bar.copy(), DISCRETE_DEPTH, PREF_DEPTH)
