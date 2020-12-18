@@ -219,31 +219,16 @@ def generate_synthesized_views(inputimg, inputdepth, t, D0):
                 resultimg[newy][newx] = inputimg[y][x]
     return resultimg, zbuffer
 
-if __name__ == "__main__":
-    cam = LytroIllum("/home/rohan/Downloads/LytroIllum_Dataset_INRIA_SIROCCO")
-    cam.calibrate()
-    cam.load_sensor_image(135)
-    cam.decode_sensor_image(135)
-    image = cam.get_decoded_image(135)
-    lf = LightField(image)
-
-    # lf.show()
-
-    disp, conf = lf.get_disparity(method='structure_tensor', fusion_method='tv_l1', epi_method = '2.5d')
-
-    I = lf[6][6]
-    D = (disp.copy()+3)/6.0
-    H, W, C = lf[6][6].shape
-
+def run_single_shot_pipeline(I, D, t):
     # create the digitally zoomed versions I1 and D1
-    I1 = cv2_clipped_zoom(I, 1.2)
-    D1 = cv2_clipped_zoom(D, 1.2)
+    I1 = cv2_clipped_zoom(I, 1.0/(1.0-abs(t)))
+    D1 = cv2_clipped_zoom(D, 1.0/(1.0-abs(t)))
     I2, D2 = I, D
 
     # create two separate view synthesis pipelines
-    I1DZ, D1DZ = generate_synthesized_views(I1, D1, -0.05, 1) #sp1.generate_synthesized_views(I1, D1)
+    I1DZ, D1DZ = generate_synthesized_views(I1, D1, t/2, 1.0) #sp1.generate_synthesized_views(I1, D1)
 
-    I2DZ, D2DZ = generate_synthesized_views(I2, D2, 0.05, 1) #sp2.generate_synthesized_views(I2, D2)
+    I2DZ, D2DZ = generate_synthesized_views(I2, D2, t/2, 1.0) #sp2.generate_synthesized_views(I2, D2)
 
     # image/depth fusion step
     mask = np.zeros_like(I1DZ)
@@ -275,8 +260,8 @@ if __name__ == "__main__":
     # Depth values always in the range of -1 to 1
     # But since it is often a subject based shot, many values clustered
     # around the center, meaning Gaussian fit would be best
-    DISCRETE_DEPTH = 5
-    PREF_DEPTH = 0.7
+    DISCRETE_DEPTH = 10
+    PREF_DEPTH = 0.9
     D_F_bar_disc = discretedepth(D_F_bar, N=DISCRETE_DEPTH)
 
     print("INFO: Done discretizing the depth values.")
@@ -287,3 +272,25 @@ if __name__ == "__main__":
 
     # Algorithm 3: Shallow Depth of Field
     finalresult = shallow_depth_of_field(D_F_bar_disc, I_F_bar.copy(), DISCRETE_DEPTH, PREF_DEPTH)
+
+    return I1, D1, I2, D2, I1DZ, D1DZ, I2DZ, D2DZ, I_F, D_F, I_F_bar, D_F_bar, finalresult
+
+if __name__ == "__main__":
+    cam = LytroIllum("/home/rohan/Downloads/LytroIllum_Dataset_INRIA_SIROCCO")
+    cam.calibrate()
+cam.load_sensor_image(310)
+cam.decode_sensor_image(310)
+image = cam.get_decoded_image(310)
+lf = LightField(image)
+
+# lf.show()
+
+disp, conf = lf.get_disparity(method='structure_tensor', fusion_method='tv_l1', epi_method = '2.5d')
+
+I = lf[6][6]
+D = (disp.copy()+3)/6.0
+H, W, C = lf[6][6].shape
+
+for i in range(10,11):
+    I1, D1, I2, D2, I1DZ, D1DZ, I2DZ, D2DZ, I_F, D_F, I_F_bar, D_F_bar, finaloutput = run_single_shot_pipeline(I, D, t=0.01*(i+1))
+    plt.imsave(str(i+1)+".png", finaloutput)
