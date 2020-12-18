@@ -1,3 +1,13 @@
+# 15-663: Computational Photography Course Project at Carnegie Mellon University
+
+## One-Shot to Vertigo: Novel View Synthesis using Light Field Cameras
+
+This final project was done as part of the 15-663 Fall 2020 course on Computational Photography taught by Prof. Ioannis Gkioulekas at Carnegie Mellon University. This project implements the paper **The ”Vertigo Effect” on Your Smartphone:   Dolly  zoom  via  single  shot  view  synthesis**. It also extends this by using light field cameras, with the help of the plenpy library. The results and implementation details are provided in the PDF.
+
+The rest of this README is retained as is from plenpy.
+
+-----------------
+
 # plenpy - A plenoptic processing library for Python.
 
 [![build status](https://gitlab.com/iiit-public/plenpy/badges/master/pipeline.svg)](https://gitlab.com/iiit-public/plenpy/commits/master)
